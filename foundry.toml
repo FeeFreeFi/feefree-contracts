@@ -1,0 +1,4 @@
+[profile.default]
+optimizer_runs = 800
+solc = "0.8.24"
+evm_version = "cancun"
