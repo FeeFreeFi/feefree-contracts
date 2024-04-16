@@ -12,6 +12,19 @@ While, what incentives do LPs have to provide liquidity? We plan to use the fund
 
 Additionally, we intend to use a portion of the funding to reward the initial liquidity providers, attracting more participants to provide liquidity during the initial phase.
 
+## Usage
+```shell
+cp .env.example .env
+
+forge install foundry-rs/forge-std transmissions11/solmate Openzeppelin/openzeppelin-contracts
+
+forge build
+
+source .env
+
+# forge script script/xxx.s.sol:xxx --broadcast -vvvv --rpc-url $XXX_RPC_URL
+```
+
 ## Reference
 [Uniswap/v4-core](https://github.com/Uniswap/v4-core)
 
