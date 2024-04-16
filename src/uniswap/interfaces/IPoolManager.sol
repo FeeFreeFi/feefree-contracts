@@ -3,13 +3,11 @@ pragma solidity ^0.8.24;
 
 import {Currency} from "../types/Currency.sol";
 import {PoolKey} from "../types/PoolKey.sol";
-import {Pool} from "../libraries/Pool.sol";
 import {IHooks} from "./IHooks.sol";
 import {IERC6909Claims} from "./external/IERC6909Claims.sol";
 import {IProtocolFees} from "./IProtocolFees.sol";
 import {BalanceDelta} from "../types/BalanceDelta.sol";
 import {PoolId} from "../types/PoolId.sol";
-import {Position} from "../libraries/Position.sol";
 import {IExtsload} from "./IExtsload.sol";
 
 interface IPoolManager is IProtocolFees, IERC6909Claims, IExtsload {
@@ -106,9 +104,6 @@ interface IPoolManager is IProtocolFees, IERC6909Claims, IExtsload {
         view
         returns (uint128 liquidity);
 
-    /// @notice Getter for TickInfo for the given poolId and tick
-    function getPoolTickInfo(PoolId id, int24 tick) external view returns (Pool.TickInfo memory);
-
     /// @notice Getter for the bitmap given the poolId and word position
     function getPoolBitmapInfo(PoolId id, int16 word) external view returns (uint256 tickBitmap);
 
@@ -117,12 +112,6 @@ interface IPoolManager is IProtocolFees, IERC6909Claims, IExtsload {
         external
         view
         returns (uint256 feeGrowthGlobal0, uint256 feeGrowthGlobal1);
-
-    /// @notice Get the position struct for a specified pool and position
-    function getPosition(PoolId id, address owner, int24 tickLower, int24 tickUpper)
-        external
-        view
-        returns (Position.Info memory position);
 
     /// @notice Returns the reserves for a given ERC20 currency
     function reservesOf(Currency currency) external view returns (uint256);
