@@ -88,7 +88,7 @@ contract FeeFreeRouter is Owned, BaseHook, IFeeFreeRouter {
             revert PoolAlreadyInitialized();
         }
 
-        string memory tokenSymbol = string(abi.encodePacked(_getCurrencySymbol(key.currency0), "-", _getCurrencySymbol(key.currency1)));
+        string memory tokenSymbol = string.concat(_getCurrencySymbol(key.currency0), "-", _getCurrencySymbol(key.currency1));
         liquidityToken[poolId] = address(new FeeFreeERC20(tokenSymbol, tokenSymbol, 18));
 
         tick = poolManager.initialize(key, params.sqrtPriceX96, ZERO_BYTES);
@@ -251,7 +251,7 @@ contract FeeFreeRouter is Owned, BaseHook, IFeeFreeRouter {
 
         address exchangeAddress = exchangeToken[currencyAddress];
         if (exchangeAddress == address(0)) {
-            string memory tokenSymbol = string(abi.encodePacked(_getCurrencySymbol(currency), "+"));
+            string memory tokenSymbol = string.concat(_getCurrencySymbol(currency), "+");
             exchangeAddress = address(new FeeFreeERC20(tokenSymbol, tokenSymbol, currency.isNative() ? 18 : IERC20Metadata(currencyAddress).decimals()));
             exchangeToken[currencyAddress] = exchangeAddress;
             isExchange[exchangeAddress] = true;
