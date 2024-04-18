@@ -72,13 +72,13 @@ contract FeeFreeRouter is Owned, BaseHook, IFeeFreeRouter {
             beforeInitialize: false,
             afterInitialize: false,
             beforeAddLiquidity: false,
-            beforeRemoveLiquidity: false,
             afterAddLiquidity: false,
-            afterRemoveLiquidity: false,
-            beforeSwap: false,
-            afterSwap: false,
-            beforeDonate: false,
-            afterDonate: false
+            beforeRemoveLiquidity: true,
+            afterRemoveLiquidity: true,
+            beforeSwap: true,
+            afterSwap: true,
+            beforeDonate: true,
+            afterDonate: true
         });
     }
 
@@ -367,6 +367,30 @@ contract FeeFreeRouter is Owned, BaseHook, IFeeFreeRouter {
 
     function setFeeController(IFeeController _feeController) external onlyOwner {
         feeController = _feeController;
+    }
+
+    function beforeRemoveLiquidity(address, PoolKey calldata, IPoolManager.ModifyLiquidityParams calldata, bytes calldata) external override pure returns (bytes4) {
+        return FeeFreeRouter.beforeRemoveLiquidity.selector;
+    }
+
+    function afterRemoveLiquidity(address, PoolKey calldata, IPoolManager.ModifyLiquidityParams calldata, BalanceDelta, bytes calldata) external override pure returns (bytes4) {
+        return FeeFreeRouter.afterRemoveLiquidity.selector;
+    }
+
+    function beforeSwap(address, PoolKey calldata, IPoolManager.SwapParams calldata, bytes calldata) external override pure returns (bytes4) {
+        return FeeFreeRouter.beforeSwap.selector;
+    }
+
+    function afterSwap(address, PoolKey calldata, IPoolManager.SwapParams calldata, BalanceDelta, bytes calldata) external override pure returns (bytes4) {
+        return FeeFreeRouter.afterSwap.selector;
+    }
+
+    function beforeDonate(address, PoolKey calldata, uint256, uint256, bytes calldata) external override pure returns (bytes4) {
+        return FeeFreeRouter.beforeDonate.selector;
+    }
+
+    function afterDonate(address, PoolKey calldata, uint256, uint256, bytes calldata) external override pure returns (bytes4) {
+        return FeeFreeRouter.afterDonate.selector;
     }
 
     function _modifyLiquidity(PoolKey memory key, IPoolManager.ModifyLiquidityParams memory params) private returns (BalanceDelta delta) {
