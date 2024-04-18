@@ -15,7 +15,7 @@ contract Deploy is Script {
 
         vm.startBroadcast(deployerPrivateKey);
 
-        FFGenesisNFT genesisNFT = new FFGenesisNFT();
+        FFGenesisNFT genesisNFT = new FFGenesisNFT("FFGenesisNFT", 1e16);
         console.log("FFGenesisNFT depoly success", address(genesisNFT));
 
         vm.stopBroadcast();

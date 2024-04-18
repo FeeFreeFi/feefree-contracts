@@ -2,6 +2,126 @@
 
 pragma solidity ^0.8.20;
 
+/**
+ * @dev Standard math utilities missing in the Solidity language.
+ */
+library Math {
+    /**
+     * @dev Return the log in base 10 of a positive value rounded towards zero.
+     * Returns 0 if given 0.
+     */
+    function log10(uint256 value) internal pure returns (uint256) {
+        uint256 result = 0;
+        unchecked {
+            if (value >= 10 ** 64) {
+                value /= 10 ** 64;
+                result += 64;
+            }
+            if (value >= 10 ** 32) {
+                value /= 10 ** 32;
+                result += 32;
+            }
+            if (value >= 10 ** 16) {
+                value /= 10 ** 16;
+                result += 16;
+            }
+            if (value >= 10 ** 8) {
+                value /= 10 ** 8;
+                result += 8;
+            }
+            if (value >= 10 ** 4) {
+                value /= 10 ** 4;
+                result += 4;
+            }
+            if (value >= 10 ** 2) {
+                value /= 10 ** 2;
+                result += 2;
+            }
+            if (value >= 10 ** 1) {
+                result += 1;
+            }
+        }
+        return result;
+    }
+}
+
+/**
+ * @dev String operations.
+ */
+library Strings {
+    bytes16 private constant HEX_DIGITS = "0123456789abcdef";
+
+    /**
+     * @dev Converts a `uint256` to its ASCII `string` decimal representation.
+     */
+    function toString(uint256 value) internal pure returns (string memory) {
+        unchecked {
+            uint256 length = Math.log10(value) + 1;
+            string memory buffer = new string(length);
+            uint256 ptr;
+            /// @solidity memory-safe-assembly
+            assembly {
+                ptr := add(buffer, add(32, length))
+            }
+            while (true) {
+                ptr--;
+                /// @solidity memory-safe-assembly
+                assembly {
+                    mstore8(ptr, byte(mod(value, 10), HEX_DIGITS))
+                }
+                value /= 10;
+                if (value == 0) break;
+            }
+            return buffer;
+        }
+    }
+}
+
+library TransferHelper {
+    error NativeTransferFailed();
+
+    function safeTransferNative(address to, uint256 amount) internal {
+        bool success;
+
+        /// @solidity memory-safe-assembly
+        assembly {
+            // Transfer the ETH and store if it succeeded or not.
+            success := call(gas(), to, amount, 0, 0, 0, 0)
+        }
+
+        if (!success) {
+            revert NativeTransferFailed();
+        }
+    }
+}
+
+/// @notice Simple single owner authorization mixin.
+/// @author Solmate (https://github.com/transmissions11/solmate/blob/main/src/auth/Owned.sol)
+abstract contract Owned {
+    error Unauthorized();
+    event OwnershipTransferred(address indexed user, address indexed newOwner);
+
+    address public owner;
+
+    modifier onlyOwner() virtual {
+        if (msg.sender != owner) {
+            revert Unauthorized();
+        }
+        _;
+    }
+
+    constructor(address _owner) {
+        owner = _owner;
+        emit OwnershipTransferred(address(0), _owner);
+    }
+
+    function transferOwnership(address newOwner) public virtual onlyOwner {
+        owner = newOwner;
+        emit OwnershipTransferred(msg.sender, newOwner);
+    }
+}
+
+
 abstract contract ERC721TokenReceiver {
     function onERC721Received(
         address,
@@ -202,55 +322,82 @@ abstract contract ERC721 {
     }
 }
 
-contract FFWeekNFT is ERC721 {
-    error InvalidId(uint256 id);
-    error Minted(address owner);
+contract FFWeekNFT is Owned, ERC721 {
+    using Strings for uint256;
 
-    string public week = "202416";
+    error InvalidPrice(uint256 expected, uint256 actual);
+    error ExceededCap();
+    error NonexistentToken(uint256 id);
 
-    mapping(address => uint256) public minted;
+    uint256 public constant cap = 1000000;
+    uint256 public totalSupply;
 
-    constructor() ERC721("FFWeekNFT", "FFW") {}
+    string public baseURI;
+    uint256 public immutable price;
+    uint256 public immutable week;
+    address public fund;
+
+    constructor(string memory baseURI_, uint256 price_, uint256 week_) Owned(msg.sender) ERC721("FFWeekNFT", "FFW") {
+        baseURI = baseURI_;
+        price = price_;
+        week = week_;
+    }
+
+    function mint(address to) public payable returns (uint256 id) {
+        if (totalSupply == cap) {
+            revert ExceededCap();
+        }
+
+        uint256 _price = price;
+        if (_price > 0) {
+            if (msg.value != _price) {
+                revert InvalidPrice(_price, msg.value);
+            }
+
+            if (fund != address(0)) {
+                TransferHelper.safeTransferNative(fund, msg.value);
+            }
+        }
+
+        id = _generateId();
+        _safeMint(to, id);
+
+        unchecked {
+            totalSupply += 1;
+        }
+    }
+
+    function setBaseURI(string memory baseURI_) external onlyOwner {
+        baseURI = baseURI_;
+    }
+
+    function setFund(address fund_) external onlyOwner {
+        fund = fund_;
+
+        uint256 amount = address(this).balance;
+        if (amount > 0) {
+            TransferHelper.safeTransferNative(fund, amount);
+        }
+    }
 
     function tokenURI(uint256 id) public view override returns (string memory) {
-        return string.concat("FFWeekNFT-", week, "-", uint2str(id));
+        _checkExist(id);
+
+        return bytes(baseURI).length > 0 ? string.concat(baseURI, id.toString()) : "";
     }
 
-    function mint() public {
-        if (minted[msg.sender] > 0) {
-            revert Minted(msg.sender);
+    function _generateId() internal view returns (uint256 id) {
+        while (true) {
+            id = uint256(keccak256(abi.encodePacked(msg.sender, block.timestamp, block.number))) % 2097151;
+            if (id > 0 && _ownerOf[id] == address(0)) {
+                break;
+            }
         }
-
-        // 2 ** 21 - 1
-        uint256 id = uint256(keccak256(abi.encodePacked(msg.sender, block.timestamp, block.number))) % 2097151;
-        if (id == 0 || _ownerOf[id] != address(0)) {
-            revert InvalidId(id);
-        }
-
-        minted[msg.sender] = id;
-        _safeMint(msg.sender, id);
     }
 
-    function uint2str(uint256 _i) internal pure returns (string memory) {
-        if (_i == 0) {
-            return "0";
+    function _checkExist(uint256 id) internal view {
+        if (_ownerOf[id] == address(0)) {
+            revert NonexistentToken(id);
         }
-        uint256 j = _i;
-        uint256 len;
-        while (j != 0) {
-            len++;
-            j /= 10;
-        }
-        bytes memory bstr = new bytes(len);
-        uint256 k = len;
-        while (_i != 0) {
-            k = k-1;
-            uint8 temp = (48 + uint8(_i - _i / 10 * 10));
-            bytes1 b1 = bytes1(temp);
-            bstr[k] = b1;
-            _i /= 10;
-        }
-
-        return string(bstr);
     }
 }
