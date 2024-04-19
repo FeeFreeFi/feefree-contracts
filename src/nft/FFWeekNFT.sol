@@ -77,24 +77,6 @@ library Strings {
     }
 }
 
-library TransferHelper {
-    error NativeTransferFailed();
-
-    function safeTransferNative(address to, uint256 amount) internal {
-        bool success;
-
-        /// @solidity memory-safe-assembly
-        assembly {
-            // Transfer the ETH and store if it succeeded or not.
-            success := call(gas(), to, amount, 0, 0, 0, 0)
-        }
-
-        if (!success) {
-            revert NativeTransferFailed();
-        }
-    }
-}
-
 /// @notice Simple single owner authorization mixin.
 /// @author Solmate (https://github.com/transmissions11/solmate/blob/main/src/auth/Owned.sol)
 abstract contract Owned {
@@ -325,7 +307,6 @@ abstract contract ERC721 {
 contract FFWeekNFT is Owned, ERC721 {
     using Strings for uint256;
 
-    error InvalidPrice(uint256 expected, uint256 actual);
     error ExceededCap();
     error NonexistentToken(uint256 id);
 
@@ -333,30 +314,16 @@ contract FFWeekNFT is Owned, ERC721 {
     uint256 public totalSupply;
 
     string public baseURI;
-    uint256 public immutable price;
     uint256 public immutable week;
-    address public fund;
 
-    constructor(string memory baseURI_, uint256 price_, uint256 week_) Owned(msg.sender) ERC721("FFWeekNFT", "FFW") {
+    constructor(string memory baseURI_, uint256 week_) Owned(msg.sender) ERC721("FFWeekNFT", "FFW") {
         baseURI = baseURI_;
-        price = price_;
         week = week_;
     }
 
     function mint(address to) public payable returns (uint256 id) {
         if (totalSupply == cap) {
             revert ExceededCap();
-        }
-
-        uint256 _price = price;
-        if (_price > 0) {
-            if (msg.value != _price) {
-                revert InvalidPrice(_price, msg.value);
-            }
-
-            if (fund != address(0)) {
-                TransferHelper.safeTransferNative(fund, msg.value);
-            }
         }
 
         id = _generateId();
@@ -369,15 +336,6 @@ contract FFWeekNFT is Owned, ERC721 {
 
     function setBaseURI(string memory baseURI_) external onlyOwner {
         baseURI = baseURI_;
-    }
-
-    function setFund(address fund_) external onlyOwner {
-        fund = fund_;
-
-        uint256 amount = address(this).balance;
-        if (amount > 0) {
-            TransferHelper.safeTransferNative(fund, amount);
-        }
     }
 
     function tokenURI(uint256 id) public view override returns (string memory) {
