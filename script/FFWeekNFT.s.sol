@@ -15,8 +15,11 @@ contract Deploy is Script {
 
         vm.startBroadcast(deployerPrivateKey);
 
-        FFWeekNFT weekNft = new FFWeekNFT("FFWeekNFT", 1e13, 202416);
-        console.log("FFWeekNFT depoly success", address(weekNft));
+        FFWeekNFT weekNft1 = new FFWeekNFT("FFWeekNFT", 202416);
+        console.log("FFWeekNFT depoly success", address(weekNft1));
+
+        FFWeekNFT weekNft2 = new FFWeekNFT("FFWeekNFT", 202417);
+        console.log("FFWeekNFT depoly success", address(weekNft2));
 
         vm.stopBroadcast();
     }
