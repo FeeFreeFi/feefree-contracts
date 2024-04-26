@@ -414,6 +414,7 @@ contract FeeFreeRouter is Owned, BaseHook, IFeeFreeRouter {
         if (currency.isNative()) {
             poolManager.settle{value: amount}(currency);
         } else {
+            poolManager.sync(currency);
             IERC20(Currency.unwrap(currency)).transferFrom(sender, address(poolManager), amount);
             poolManager.settle(currency);
         }
