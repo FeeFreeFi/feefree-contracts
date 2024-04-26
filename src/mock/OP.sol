@@ -2,10 +2,10 @@
 
 pragma solidity ^0.8.20;
 
-import "@openzeppelin/contracts/token/ERC20/ERC20.sol";
+import {ERC20} from "solmate/tokens/ERC20.sol";
 
 contract OP is ERC20 {
-    constructor() ERC20("OP", "OP") {
-        _mint(_msgSender(), 1e40);
+    constructor() ERC20("OP", "OP", 18) {
+        _mint(msg.sender, 1e40);
     }
 }
