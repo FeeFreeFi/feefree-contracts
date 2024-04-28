@@ -11,7 +11,7 @@ contract FeeController is IFeeController {
     error WithdrawFail();
     event OwnerChanged(address indexed oldOwner, address indexed newOwner);
 
-    mapping(bytes32 => uint256) public poolFees;
+    mapping(bytes32 => uint256) public poolFee;
 
     constructor(address _owner, uint96 _fee) {
         owner = _owner;
@@ -23,15 +23,14 @@ contract FeeController is IFeeController {
         _;
     }
 
-    function setOwner(address _owner) external onlyOwner {
-        emit OwnerChanged(owner, _owner);
-        owner = _owner;
+    function setOwner(address newOwner) external onlyOwner {
+        emit OwnerChanged(owner, newOwner);
+        owner = newOwner;
     }
 
     function setFee(uint96 newFee) external onlyOwner {
-        uint96 oldFee = fee;
+        emit FeeChanged(fee, newFee);
         fee = newFee;
-        emit FeeChanged(oldFee, newFee);
     }
 
     function collectFee(bytes32 id) external payable override {
@@ -42,11 +41,11 @@ contract FeeController is IFeeController {
             revert InsufficientFee();
         }
 
-        poolFees[id] += msg.value;
+        poolFee[id] += msg.value;
     }
 
     function withdrawFee(bytes32 id, uint256 amount, address to) external onlyOwner {
-        poolFees[id] -= amount;
+        poolFee[id] -= amount;
 
         bool success;
         assembly {
@@ -56,5 +55,7 @@ contract FeeController is IFeeController {
         if (!success) revert WithdrawFail();
     }
 
-    receive() external payable {}
+    receive() external payable {
+        poolFee[bytes32(0)] += msg.value;
+    }
 }
