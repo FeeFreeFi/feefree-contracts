@@ -55,4 +55,6 @@ contract FeeController is IFeeController {
 
         if (!success) revert WithdrawFail();
     }
+
+    receive() external payable {}
 }
