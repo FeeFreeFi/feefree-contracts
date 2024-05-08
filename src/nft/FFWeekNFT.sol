@@ -346,7 +346,7 @@ contract FFWeekNFT is Owned, ERC721 {
 
     function _generateId() internal view returns (uint256 id) {
         while (true) {
-            id = uint256(keccak256(abi.encodePacked(msg.sender, block.timestamp, block.number))) % 2097151;
+            id = uint256(keccak256(abi.encodePacked(msg.sender, address(this), totalSupply))) % 2097151;
             if (id > 0 && _ownerOf[id] == address(0)) {
                 break;
             }
