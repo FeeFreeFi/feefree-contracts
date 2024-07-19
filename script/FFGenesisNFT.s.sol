@@ -15,7 +15,7 @@ contract Deploy is Script {
 
         vm.startBroadcast(deployerPrivateKey);
 
-        FFGenesisNFT genesisNFT = new FFGenesisNFT("FFGenesisNFT", 1e16);
+        FFGenesisNFT genesisNFT = new FFGenesisNFT("https://app.feefree.fi/uri/nft/84532/genesis/", 1e16);
         console.log("FFGenesisNFT depoly success", address(genesisNFT));
 
         vm.stopBroadcast();
