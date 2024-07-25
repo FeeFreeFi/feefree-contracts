@@ -1,95 +1,88 @@
 // SPDX-License-Identifier: MIT
-pragma solidity ^0.8.20;
+pragma solidity ^0.8.0;
 
 import {Owned} from "solmate/auth/Owned.sol";
 import {IPoolManager} from "../uniswap/interfaces/IPoolManager.sol";
-import {IHooks} from "../uniswap/interfaces/IHooks.sol";
+import {IUnlockCallback} from "../uniswap/interfaces/callback/IUnlockCallback.sol";
 import {BalanceDelta, toBalanceDelta} from "../uniswap/types/BalanceDelta.sol";
 import {Currency, CurrencyLibrary} from "../uniswap/types/Currency.sol";
 import {PoolKey} from "../uniswap/types/PoolKey.sol";
 import {PoolId, PoolIdLibrary} from "../uniswap/types/PoolId.sol";
-import {Hooks} from "../uniswap/libraries/Hooks.sol";
 import {SafeCast} from "../uniswap/libraries/SafeCast.sol";
 import {FullMath} from "../uniswap/libraries/FullMath.sol";
-import {FixedPoint96} from "../uniswap/libraries/FixedPoint96.sol";
-import {LiquidityAmounts} from "./libraries/LiquidityAmounts.sol";
-import {BaseHook} from "./BaseHook.sol";
-import {FixedPointMathLib} from "./libraries/FixedPointMathLib.sol";
+import {StateLibrary} from "./libraries/StateLibrary.sol";
+import {PoolLibrary} from "./libraries/PoolLibrary.sol";
 import {IERC20} from "./interfaces/IERC20.sol";
-import {IERC20Metadata} from "./interfaces/IERC20Metadata.sol";
 import {IFeeFreeRouter} from "./interfaces/IFeeFreeRouter.sol";
 import {IFeeController} from "./interfaces/IFeeController.sol";
 import {IFeeFreeERC20} from "./interfaces/IFeeFreeERC20.sol";
+import {IERC20Metadata} from "./interfaces/IERC20Metadata.sol";
 import {FeeFreeERC20} from "./FeeFreeERC20.sol";
 
-contract FeeFreeRouter is Owned, BaseHook, IFeeFreeRouter {
+contract FeeFreeRouter is Owned, IUnlockCallback, IFeeFreeRouter {
     using CurrencyLibrary for Currency;
     using PoolIdLibrary for PoolKey;
+    using StateLibrary for IPoolManager;
     using SafeCast for uint256;
     using SafeCast for int256;
     using SafeCast for uint128;
 
-    /// @notice Thrown when trying to interact with a non-initialized pool
+    error NotPoolManager();
+    error NotSelf();
+    error LockFailure();
     error PoolNotInitialized();
-    /// @notice Thrown when trying to initialize an already initialized pool
     error PoolAlreadyInitialized();
-    error TickSpacingNotDefault();
     error LiquidityDoesntMeetMinimum();
-    // error SenderMustBeHook();
     error ExpiredPastDeadline();
     error TooMuchSlippage();
     error NotRawCurrency();
 
     bytes private constant ZERO_BYTES = bytes("");
 
-    /// @dev Min tick for full range with tick spacing of 60
-    int24 private constant MIN_TICK = -887220;
-    /// @dev Max tick for full range with tick spacing of 60
-    int24 private constant MAX_TICK = 887220;
-    /// @dev The minimum value that can be returned from #getSqrtRatioAtTick. Equivalent to getSqrtRatioAtTick(MIN_TICK)
-    uint160 private constant MIN_SQRT_RATIO = 4306310044;
-    /// @dev The maximum value that can be returned from #getSqrtRatioAtTick. Equivalent to getSqrtRatioAtTick(MAX_TICK)
-    uint160 private constant MAX_SQRT_RATIO = 1457652066949847389969617340386294118487833376468;
-
     uint16 private constant MINIMUM_LIQUIDITY = 1000;
-    string private constant NATIVE_SYMBOL = "NATIVE";
+
+    IPoolManager public immutable poolManager;
+    IFeeController public feeController;
 
     mapping(PoolId => address) public override liquidityToken;
     mapping(address => address) public override exchangeToken;
     mapping(address => bool) private isExchange;
 
-    IFeeController public feeController;
+    constructor(IPoolManager _poolManager, address _owner) Owned(_owner) {
+        poolManager = _poolManager;
+    }
 
-    constructor(IPoolManager _poolManager, address _owner) Owned(_owner) BaseHook(_poolManager) {}
+    modifier onlyPool() {
+        if (msg.sender != address(poolManager)) revert NotPoolManager();
+        _;
+    }
+
+    modifier onlySelf() {
+        if (msg.sender != address(this)) revert NotSelf();
+        _;
+    }
 
     modifier ensure(uint96 deadline) {
         if (deadline < block.timestamp) revert ExpiredPastDeadline();
         _;
     }
 
-    function getHookPermissions() public pure override returns (Hooks.Permissions memory) {
-        return Hooks.Permissions({
-            beforeInitialize: false,
-            afterInitialize: false,
-            beforeAddLiquidity: false,
-            afterAddLiquidity: false,
-            beforeRemoveLiquidity: true,
-            afterRemoveLiquidity: true,
-            beforeSwap: true,
-            afterSwap: true,
-            beforeDonate: true,
-            afterDonate: true
-        });
+    function unlockCallback(bytes calldata data) external override onlyPool returns (bytes memory) {
+        (bool success, bytes memory returnData) = address(this).call(data);
+        if (success) return returnData;
+        if (returnData.length == 0) revert LockFailure();
+        // if the call failed, bubble up the reason
+        assembly {
+            revert(add(returnData, 32), mload(returnData))
+        }
     }
 
     function initialize(InitializeParams memory params) public override returns (int24 tick) {
         (PoolKey memory key, PoolId poolId, uint160 sqrtPriceX96) = _getPoolMeta(params.currency0, params.currency1);
-        if (sqrtPriceX96 != 0) {
-            revert PoolAlreadyInitialized();
-        }
 
-        string memory tokenSymbol = string.concat(_getCurrencySymbol(key.currency0), "-", _getCurrencySymbol(key.currency1));
-        liquidityToken[poolId] = address(new FeeFreeERC20(tokenSymbol, tokenSymbol, 18));
+        if (sqrtPriceX96 != 0) revert PoolAlreadyInitialized();
+
+        liquidityToken[poolId] = _deployLiquidityToken(Currency.unwrap(key.currency0), Currency.unwrap(key.currency1));
 
         tick = poolManager.initialize(key, params.sqrtPriceX96, ZERO_BYTES);
     }
@@ -98,7 +91,7 @@ contract FeeFreeRouter is Owned, BaseHook, IFeeFreeRouter {
         (PoolKey memory key, PoolId poolId, uint160 sqrtPriceX96) = _getPoolMeta(params.currency0, params.currency1);
 
         if (sqrtPriceX96 == 0) {
-            sqrtPriceX96 = (FixedPointMathLib.sqrt(FullMath.mulDiv(FixedPoint96.Q96, params.amount1Desired, params.amount0Desired)) << 48).toUint160();
+            sqrtPriceX96 = PoolLibrary.getSqrtPriceX96(params.amount1Desired, params.amount0Desired);
             InitializeParams memory initParams = InitializeParams({
                 currency0: params.currency0,
                 currency1: params.currency1,
@@ -108,20 +101,29 @@ contract FeeFreeRouter is Owned, BaseHook, IFeeFreeRouter {
             initialize(initParams);
         }
 
-        uint128 poolLiquidity;
-        (poolLiquidity, liquidity) = _getLiquidities(poolId, sqrtPriceX96, params.amount0Desired, params.amount1Desired);
-        BalanceDelta addedDelta = _modifyLiquidity(key, _getModifyLiquidityParams(liquidity.toInt256()));
+        uint128 poolLiquidity = _getLiquidity(poolId);
+        liquidity = PoolLibrary.getNewLiquidity(sqrtPriceX96, params.amount0Desired, params.amount1Desired);
+        _checkLiquidity(poolLiquidity, liquidity);
+
+        BalanceDelta addedDelta = _modifyLiquidity(key, PoolLibrary.getModifyLiquidityParams(liquidity.toInt256()));
 
         if (poolLiquidity == 0) {
             // permanently lock the first MINIMUM_LIQUIDITY tokens
             liquidity -= MINIMUM_LIQUIDITY;
-            IFeeFreeERC20(liquidityToken[poolId]).mint(address(0), MINIMUM_LIQUIDITY);
+            _mintToken(liquidityToken[poolId], address(0), MINIMUM_LIQUIDITY);
         }
 
-        IFeeFreeERC20(liquidityToken[poolId]).mint(params.to, liquidity);
+        _mintToken(liquidityToken[poolId], params.to, liquidity);
 
         if (uint128(-addedDelta.amount0()) < params.amount0Min || uint128(-addedDelta.amount1()) < params.amount1Min) {
             revert TooMuchSlippage();
+        }
+
+        if (params.currency0.isNative()) {
+            uint256 remain = msg.value - uint128(-addedDelta.amount0());
+            if (remain > 0) {
+                params.currency0.transfer(msg.sender, remain);
+            }
         }
     }
 
@@ -130,17 +132,17 @@ contract FeeFreeRouter is Owned, BaseHook, IFeeFreeRouter {
 
         if (sqrtPriceX96 == 0) revert PoolNotInitialized();
 
-        delta = _modifyLiquidity(key, _getModifyLiquidityParams(-(params.liquidity.toInt256())));
+        delta = _modifyLiquidity(key, PoolLibrary.getModifyLiquidityParams(-(params.liquidity.toInt256())));
 
-        IFeeFreeERC20(liquidityToken[poolId]).burn(msg.sender, params.liquidity);
+        _burnToken(liquidityToken[poolId], msg.sender, params.liquidity);
     }
 
     function swap(SwapParams calldata params) external payable override ensure(params.deadline) returns (BalanceDelta delta) {
-        delta = abi.decode(poolManager.unlock(abi.encodeWithSelector(this.onSwap.selector, params.paths, params.sqrtPriceX96Limits, params.amountSpecified, params.to, msg.sender)), (BalanceDelta));
+        delta = abi.decode(_unlock(abi.encodeWithSelector(this.onSwap.selector, params.paths, params.sqrtPriceX96Limits, params.amountSpecified, params.to, msg.sender)), (BalanceDelta));
     }
 
     function exchange(ExchangeParams calldata params) external payable override {
-        poolManager.unlock(abi.encodeWithSelector(this.onExchange.selector, params.currency, params.amountSpecified, params.to, msg.sender));
+        _unlock(abi.encodeWithSelector(this.onExchange.selector, params.currency, params.amountSpecified, params.to, msg.sender));
     }
 
     function quoteSwap(QuoteSwapParams calldata params) external override returns (int128[] memory deltaAmounts, uint160[] memory sqrtPriceX96Afters) {
@@ -164,18 +166,14 @@ contract FeeFreeRouter is Owned, BaseHook, IFeeFreeRouter {
         }
     }
 
-    function getPoolId(address currency0, address currency1) external override view returns (bytes32) {
-        if (currency0 > currency1) {
-            (currency0, currency1) = (currency1, currency0);
-        }
-
-        return PoolId.unwrap(_getPoolKey(Currency.wrap(currency0), Currency.wrap(currency1)).toId());
+    function getPoolId(address currency0, address currency1) external override pure returns (bytes32) {
+        return PoolLibrary.getPoolId(currency0, currency1);
     }
 
     function getPoolState(bytes32 id) external override view returns (uint160 sqrtPriceX96, uint128 liquidity) {
         PoolId poolId = PoolId.wrap(id);
-        (sqrtPriceX96,,,) = poolManager.getSlot0(poolId);
-        liquidity = poolManager.getLiquidity(poolId);
+        sqrtPriceX96 = _getPoolSqrtPrice(poolId);
+        liquidity = _getLiquidity(poolId);
     }
 
     function getFee() external override view returns (uint96 fee) {
@@ -184,7 +182,7 @@ contract FeeFreeRouter is Owned, BaseHook, IFeeFreeRouter {
         }
     }
 
-    function onSwap(Currency[] memory paths, uint160[] memory sqrtPriceX96Limits, int128 amountSpecified, address to, address sender) external selfOnly returns (BalanceDelta delta) {
+    function onSwap(Currency[] memory paths, uint160[] memory sqrtPriceX96Limits, int128 amountSpecified, address to, address sender) external onlySelf returns (BalanceDelta delta) {
         uint256 step = paths.length - 1;
 
         PoolKey memory key;
@@ -195,9 +193,7 @@ contract FeeFreeRouter is Owned, BaseHook, IFeeFreeRouter {
         if (amountSpecified < 0) {
             j = 1;
             while (i < step) {
-                (key, params) = _getSwapData(paths[i], paths[j], amountSpecified, sqrtPriceX96Limits[i]);
-                delta = poolManager.swap(key, params, ZERO_BYTES);
-                amountSpecified = params.zeroForOne ? -delta.amount1() : -delta.amount0();
+                (key, params, delta, amountSpecified) = _swap(paths[i], paths[j], amountSpecified, sqrtPriceX96Limits[i], false);
                 unchecked {
                     ++i;
                     ++j;
@@ -207,9 +203,7 @@ contract FeeFreeRouter is Owned, BaseHook, IFeeFreeRouter {
             i = step;
             j = step - 1;
             while (i > 0) {
-                (key, params) = _getSwapData(paths[j], paths[i], amountSpecified, sqrtPriceX96Limits[j]);
-                delta = poolManager.swap(key, params, ZERO_BYTES);
-                amountSpecified = params.zeroForOne ? -delta.amount0() : -delta.amount1();
+                (key, params, delta, amountSpecified) = _swap(paths[j], paths[i], amountSpecified, sqrtPriceX96Limits[j], true);
                 unchecked {
                     --i;
                     --j;
@@ -217,21 +211,21 @@ contract FeeFreeRouter is Owned, BaseHook, IFeeFreeRouter {
             }
         }
 
-        Currency inputCurrency = paths[0];
-        Currency outputCurrency = paths[step];
+        int256 amountIn = _getCurrencyDelta(paths[0]);
+        int256 amountOut = _getCurrencyDelta(paths[step]);
+        if (amountOut == 0) {
+            revert TooMuchSlippage();
+        }
 
-        int256 amount0 = poolManager.currencyDelta(address(this), inputCurrency);
-        int256 amount1 = poolManager.currencyDelta(address(this), outputCurrency);
-
-        _settleDelta(sender, inputCurrency, uint128(-amount0.toInt128()));
-        _takeDelta(to, outputCurrency, uint128(amount1.toInt128()));
+        _settleDelta(sender, paths[0], uint256(-amountIn));
+        _takeDelta(to, paths[step], uint256(amountOut));
 
         _collectFee(PoolId.unwrap(key.toId()));
 
-        delta = toBalanceDelta(amount0.toInt128(), amount1.toInt128());
+        delta = toBalanceDelta(amountIn.toInt128(), amountOut.toInt128());
     }
 
-    function onModifyLiquidity(PoolKey memory key, IPoolManager.ModifyLiquidityParams memory params, address sender) external selfOnly returns (BalanceDelta delta) {
+    function onModifyLiquidity(PoolKey memory key, IPoolManager.ModifyLiquidityParams memory params, address sender) external onlySelf returns (BalanceDelta delta) {
         if (params.liquidityDelta < 0) {
             delta = _removeLiquidity(key, params);
             _takeDelta(sender, key.currency0, uint128(delta.amount0()));
@@ -243,7 +237,7 @@ contract FeeFreeRouter is Owned, BaseHook, IFeeFreeRouter {
         }
     }
 
-    function onExchange(Currency currency, int128 amountSpecified, address to, address sender) external payable selfOnly returns (bytes memory) {
+    function onExchange(Currency currency, int128 amountSpecified, address to, address sender) external payable onlySelf returns (bytes memory) {
         address currencyAddress = Currency.unwrap(currency);
         if (isExchange[currencyAddress]) {
             revert NotRawCurrency();
@@ -251,8 +245,7 @@ contract FeeFreeRouter is Owned, BaseHook, IFeeFreeRouter {
 
         address exchangeAddress = exchangeToken[currencyAddress];
         if (exchangeAddress == address(0)) {
-            string memory tokenSymbol = string.concat(_getCurrencySymbol(currency), "+");
-            exchangeAddress = address(new FeeFreeERC20(tokenSymbol, tokenSymbol, currency.isNative() ? 18 : IERC20Metadata(currencyAddress).decimals()));
+            exchangeAddress = _deployExchangeToken(Currency.unwrap(currency));
             exchangeToken[currencyAddress] = exchangeAddress;
             isExchange[exchangeAddress] = true;
         }
@@ -260,14 +253,14 @@ contract FeeFreeRouter is Owned, BaseHook, IFeeFreeRouter {
         uint256 amount;
         if (amountSpecified < 0) {
             _settleDelta(sender, currency, uint128(-amountSpecified));
-            amount = uint256(poolManager.currencyDelta(address(this), currency));
+            amount = uint256(_getCurrencyDelta(currency));
             poolManager.mint(address(this), currency.toId(), amount);
-            IFeeFreeERC20(exchangeAddress).mint(sender, amount);
+            _mintToken(exchangeAddress, sender, amount);
         } else {
             amount = uint128(amountSpecified);
             _takeDelta(to, currency, uint128(amountSpecified));
             poolManager.burn(address(this), currency.toId(), amount);
-            IFeeFreeERC20(exchangeAddress).burn(sender, amount);
+            _burnToken(exchangeAddress, sender, amount);
         }
 
         _collectFee(bytes32(0));
@@ -275,7 +268,7 @@ contract FeeFreeRouter is Owned, BaseHook, IFeeFreeRouter {
         return ZERO_BYTES;
     }
 
-    function onQuoteSwap(Currency[] memory paths, int128 amountSpecified) external selfOnly returns (bytes memory) {
+    function onQuoteSwap(Currency[] memory paths, int128 amountSpecified) external onlySelf returns (bytes memory) {
         uint256 length = paths.length;
         uint256 step = length - 1;
 
@@ -293,39 +286,30 @@ contract FeeFreeRouter is Owned, BaseHook, IFeeFreeRouter {
         if (amountSpecified < 0) {
             j = 1;
             while (i < step) {
-                (key, params) = _getSwapData(paths[i], paths[j], amountSpecified, 0);
-
                 deltaAmounts[i] = amountSpecified;
-                delta = poolManager.swap(key, params, ZERO_BYTES);
-                (sqrtPriceX96Afters[i],,,) = poolManager.getSlot0(key.toId());
-
-                deltaAmount = params.zeroForOne ? delta.amount1() : delta.amount0();
-                amountSpecified = -deltaAmount;
+                (key, params, delta, amountSpecified) = _swap(paths[i], paths[j], amountSpecified, 0, false);
+                sqrtPriceX96Afters[i] = _getPoolSqrtPrice(key.toId());
+                deltaAmount = -amountSpecified;
                 unchecked {
                     ++i;
                     ++j;
                 }
             }
-            deltaAmounts[step] = deltaAmount;
         } else {
             i = step;
             j = step - 1;
             while (i > 0) {
-                (key, params) = _getSwapData(paths[j], paths[i], amountSpecified, 0);
-
                 deltaAmounts[i] = amountSpecified;
-                delta = poolManager.swap(key, params, ZERO_BYTES);
-                (sqrtPriceX96Afters[j],,,) = poolManager.getSlot0(key.toId());
-
-                deltaAmount = params.zeroForOne ? delta.amount0() : delta.amount1();
-                amountSpecified = -deltaAmount;
+                (key, params, delta, amountSpecified) = _swap(paths[j], paths[i], amountSpecified, 0, true);
+                sqrtPriceX96Afters[j] = _getPoolSqrtPrice(key.toId());
+                deltaAmount = -amountSpecified;
                 unchecked {
                     --i;
                     --j;
                 }
             }
-            deltaAmounts[0] = deltaAmount;
         }
+        deltaAmounts[i] = deltaAmount;
 
         bytes memory result = abi.encode(deltaAmounts, sqrtPriceX96Afters);
         assembly {
@@ -333,13 +317,16 @@ contract FeeFreeRouter is Owned, BaseHook, IFeeFreeRouter {
         }
     }
 
-    function onQuoteAddLiquidity(QuoteAddLiquidityParams calldata params) external selfOnly returns (bytes memory) {
+    function onQuoteAddLiquidity(QuoteAddLiquidityParams calldata params) external onlySelf returns (bytes memory) {
         (PoolKey memory key, PoolId poolId, uint160 sqrtPriceX96) = _getPoolMeta(params.currency0, params.currency1);
 
         if (sqrtPriceX96 == 0) revert PoolNotInitialized();
 
-        (uint128 poolLiquidity, uint128 liquidity) = _getLiquidities(poolId, sqrtPriceX96, params.amount0Desired, params.amount1Desired);
-        (BalanceDelta addedDelta,) = poolManager.modifyLiquidity(key, _getModifyLiquidityParams(liquidity.toInt256()), ZERO_BYTES);
+        uint128 poolLiquidity = _getLiquidity(poolId);
+        uint128 liquidity = PoolLibrary.getNewLiquidity(sqrtPriceX96, params.amount0Desired, params.amount1Desired);
+        _checkLiquidity(poolLiquidity, liquidity);
+
+        (BalanceDelta addedDelta,) = poolManager.modifyLiquidity(key, PoolLibrary.getModifyLiquidityParams(liquidity.toInt256()), ZERO_BYTES);
 
         if (poolLiquidity == 0) {
             // permanently lock the first MINIMUM_LIQUIDITY tokens
@@ -352,12 +339,12 @@ contract FeeFreeRouter is Owned, BaseHook, IFeeFreeRouter {
         }
     }
 
-    function onQuoteRemoveLiquidity(QuoteRemoveLiquidityParams calldata params) external selfOnly returns (bytes memory) {
+    function onQuoteRemoveLiquidity(QuoteRemoveLiquidityParams calldata params) external onlySelf returns (bytes memory) {
         (PoolKey memory key, , uint160 sqrtPriceX96) = _getPoolMeta(params.currency0, params.currency1);
 
         if (sqrtPriceX96 == 0) revert PoolNotInitialized();
 
-        BalanceDelta delta = _removeLiquidity(key, _getModifyLiquidityParams(-(params.liquidity.toInt256())));
+        BalanceDelta delta = _removeLiquidity(key, PoolLibrary.getModifyLiquidityParams(-(params.liquidity.toInt256())));
 
         bytes memory result = abi.encode(uint128(delta.amount0()), uint128(delta.amount1()));
         assembly {
@@ -369,32 +356,16 @@ contract FeeFreeRouter is Owned, BaseHook, IFeeFreeRouter {
         feeController = _feeController;
     }
 
-    function beforeRemoveLiquidity(address, PoolKey calldata, IPoolManager.ModifyLiquidityParams calldata, bytes calldata) external override pure returns (bytes4) {
-        return FeeFreeRouter.beforeRemoveLiquidity.selector;
+    function rescue(address token, address to, uint256 amount) external onlyOwner {
+        Currency.wrap(token).transfer(to, amount);
     }
 
-    function afterRemoveLiquidity(address, PoolKey calldata, IPoolManager.ModifyLiquidityParams calldata, BalanceDelta, bytes calldata) external override pure returns (bytes4) {
-        return FeeFreeRouter.afterRemoveLiquidity.selector;
-    }
-
-    function beforeSwap(address, PoolKey calldata, IPoolManager.SwapParams calldata, bytes calldata) external override pure returns (bytes4) {
-        return FeeFreeRouter.beforeSwap.selector;
-    }
-
-    function afterSwap(address, PoolKey calldata, IPoolManager.SwapParams calldata, BalanceDelta, bytes calldata) external override pure returns (bytes4) {
-        return FeeFreeRouter.afterSwap.selector;
-    }
-
-    function beforeDonate(address, PoolKey calldata, uint256, uint256, bytes calldata) external override pure returns (bytes4) {
-        return FeeFreeRouter.beforeDonate.selector;
-    }
-
-    function afterDonate(address, PoolKey calldata, uint256, uint256, bytes calldata) external override pure returns (bytes4) {
-        return FeeFreeRouter.afterDonate.selector;
+    function _unlock(bytes memory data) private returns (bytes memory) {
+        return poolManager.unlock(data);
     }
 
     function _modifyLiquidity(PoolKey memory key, IPoolManager.ModifyLiquidityParams memory params) private returns (BalanceDelta delta) {
-        delta = abi.decode(poolManager.unlock(abi.encodeWithSelector(this.onModifyLiquidity.selector, key, params, msg.sender)), (BalanceDelta));
+        delta = abi.decode(_unlock(abi.encodeWithSelector(this.onModifyLiquidity.selector, key, params, msg.sender)), (BalanceDelta));
     }
 
     function _removeLiquidity(PoolKey memory key, IPoolManager.ModifyLiquidityParams memory params) private returns (BalanceDelta delta) {
@@ -402,7 +373,7 @@ contract FeeFreeRouter is Owned, BaseHook, IFeeFreeRouter {
 
         uint256 liquidityToRemove = FullMath.mulDiv(
             uint256(-params.liquidityDelta),
-            poolManager.getLiquidity(poolId),
+            _getLiquidity(poolId),
             IFeeFreeERC20(liquidityToken[poolId]).totalSupply()
         );
 
@@ -410,68 +381,43 @@ contract FeeFreeRouter is Owned, BaseHook, IFeeFreeRouter {
         (delta,) = poolManager.modifyLiquidity(key, params, ZERO_BYTES);
     }
 
-    function _settleDelta(address sender, Currency currency, uint128 amount) private {
+    function _swap(Currency input, Currency output, int128 amountSpecified, uint160 sqrtPriceLimitX96, bool reverse) private returns (PoolKey memory key, IPoolManager.SwapParams memory params, BalanceDelta delta, int128 amountOut) {
+        (key, params) = PoolLibrary.getSwapData(input, output, amountSpecified, sqrtPriceLimitX96);
+        delta = poolManager.swap(key, params, ZERO_BYTES);
+        amountOut = params.zeroForOne == reverse ? -delta.amount0() : -delta.amount1();
+    }
+
+    function _settleDelta(address sender, Currency currency, uint256 amount) private {
         if (currency.isNative()) {
-            poolManager.settle{value: amount}(currency);
+            poolManager.settle{value: amount}();
         } else {
             poolManager.sync(currency);
             IERC20(Currency.unwrap(currency)).transferFrom(sender, address(poolManager), amount);
-            poolManager.settle(currency);
+            poolManager.settle();
         }
     }
 
-    function _takeDelta(address to, Currency currency, uint128 amount) private {
+    function _takeDelta(address to, Currency currency, uint256 amount) private {
         poolManager.take(currency, to, amount);
     }
 
-    function _getSwapData(Currency input, Currency output, int128 amountSpecified, uint160 sqrtPriceLimitX96) private view returns (PoolKey memory key, IPoolManager.SwapParams memory params) {
-        (Currency currency0, Currency currency1) = input < output ? (input, output) : (output, input);
-
-        bool zeroForOne = input == currency0;
-        if (sqrtPriceLimitX96 == 0) {
-            sqrtPriceLimitX96 = zeroForOne ? MIN_SQRT_RATIO : MAX_SQRT_RATIO;
-        }
-
-        key = _getPoolKey(currency0, currency1);
-        params = IPoolManager.SwapParams(zeroForOne, amountSpecified, sqrtPriceLimitX96);
+    function _mintToken(address token, address to, uint256 amount) private {
+        IFeeFreeERC20(token).mint(to, amount);
     }
 
-    function _getPoolKey(Currency currency0, Currency currency1) private view returns (PoolKey memory) {
-        return PoolKey(currency0, currency1, 0x800000, 60, IHooks(address(this)));
+    function _burnToken(address token, address sender, uint256 amount) private {
+        IFeeFreeERC20(token).burn(sender, amount);
     }
 
-    function _getPoolMeta(Currency currency0, Currency currency1) private view returns (PoolKey memory key, PoolId poolId, uint160 sqrtPriceX96) {
-        key = _getPoolKey(currency0, currency1);
-        poolId = key.toId();
-        (sqrtPriceX96,,,) = poolManager.getSlot0(poolId);
+    function _deployLiquidityToken(address currency0, address currency1) private returns (address) {
+        string memory symbol = string.concat(_getSymbol(currency0), "-", _getSymbol(currency1));
+        return address(new FeeFreeERC20(symbol, symbol, 18));
     }
 
-    function _getModifyLiquidityParams(int256 liquidityDelta) private pure returns (IPoolManager.ModifyLiquidityParams memory params) {
-        params = IPoolManager.ModifyLiquidityParams({
-            tickLower: MIN_TICK,
-            tickUpper: MAX_TICK,
-            liquidityDelta: liquidityDelta
-        });
-    }
-
-    function _getLiquidities(PoolId poolId, uint160 sqrtPriceX96, uint256 amount0, uint256 amount1) private view returns (uint128 poolLiquidity, uint128 liquidity) {
-        poolLiquidity = poolManager.getLiquidity(poolId);
-
-        liquidity = LiquidityAmounts.getLiquidityForAmounts(
-            sqrtPriceX96,
-            MIN_SQRT_RATIO,
-            MAX_SQRT_RATIO,
-            amount0,
-            amount1
-        );
-
-        if (poolLiquidity == 0 && liquidity <= MINIMUM_LIQUIDITY) {
-            revert LiquidityDoesntMeetMinimum();
-        }
-    }
-
-    function _getCurrencySymbol(Currency currency) private view returns (string memory) {
-        return currency.isNative() ? NATIVE_SYMBOL : IERC20Metadata(Currency.unwrap(currency)).symbol();
+    function _deployExchangeToken(address currency) private returns (address) {
+        string memory symbol = string.concat(_getSymbol(currency), "+");
+        uint8 decimals = _isNative(currency) ? 18 : IERC20Metadata(currency).decimals();
+        return address(new FeeFreeERC20(symbol, symbol, decimals));
     }
 
     function _collectFee(bytes32 id) private {
@@ -481,5 +427,37 @@ contract FeeFreeRouter is Owned, BaseHook, IFeeFreeRouter {
                 feeController.collectFee{value:fee}(id);
             }
         }
+    }
+
+    function _checkLiquidity(uint128 poolLiquidity, uint128 liquidity) private pure {
+        if (poolLiquidity == 0 && liquidity <= MINIMUM_LIQUIDITY) {
+            revert LiquidityDoesntMeetMinimum();
+        }
+    }
+
+    function _getSymbol(address currency) private view returns (string memory) {
+        return _isNative(currency) ? "NATIVE" : IERC20Metadata(currency).symbol();
+    }
+
+    function _isNative(address currency) private pure returns (bool) {
+        return currency == address(0);
+    }
+
+    function _getCurrencyDelta(Currency currency) private view returns (int256) {
+        return poolManager.currencyDelta(address(this), currency);
+    }
+
+    function _getPoolSqrtPrice(PoolId poolId) private view returns (uint160) {
+        return poolManager.getSqrtPriceX96(poolId);
+    }
+
+    function _getLiquidity(PoolId poolId) private view returns (uint128) {
+        return poolManager.getLiquidity(poolId);
+    }
+
+    function _getPoolMeta(Currency currency0, Currency currency1) private view returns (PoolKey memory key, PoolId poolId, uint160 sqrtPriceX96) {
+        key = PoolLibrary.getPoolKey(currency0, currency1);
+        poolId = key.toId();
+        sqrtPriceX96 = _getPoolSqrtPrice(poolId);
     }
 }

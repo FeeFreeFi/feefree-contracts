@@ -5,7 +5,7 @@ To build a Robinhood-style DEX in the blockchain industry, enabling participatio
 ```shell
 cp .env.example .env
 
-forge install foundry-rs/forge-std transmissions11/solmate Openzeppelin/openzeppelin-contracts
+forge install foundry-rs/forge-std transmissions11/solmate openzeppelin/openzeppelin-contracts --no-git --no-commit
 
 forge build
 
