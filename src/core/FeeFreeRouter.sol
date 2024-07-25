@@ -19,6 +19,16 @@ import {IFeeFreeERC20} from "./interfaces/IFeeFreeERC20.sol";
 import {IERC20Metadata} from "./interfaces/IERC20Metadata.sol";
 import {FeeFreeERC20} from "./FeeFreeERC20.sol";
 
+/***
+ *    00000000\                  00000000\
+ *    00  _____|                 00  _____|
+ *    00 |    000000\   000000\  00 |    000000\   000000\   000000\
+ *    00000\ 00  __00\ 00  __00\ 00000\ 00  __00\ 00  __00\ 00  __00\
+ *    00  __|00000000 |00000000 |00  __|00 |  \__|00000000 |00000000 |
+ *    00 |   00   ____|00   ____|00 |   00 |      00   ____|00   ____|
+ *    00 |   \0000000\ \0000000\ 00 |   00 |      \0000000\ \0000000\
+ *    \__|    \_______| \_______|\__|   \__|       \_______| \_______|
+ */
 contract FeeFreeRouter is Owned, IUnlockCallback, IFeeFreeRouter {
     using CurrencyLibrary for Currency;
     using PoolIdLibrary for PoolKey;
