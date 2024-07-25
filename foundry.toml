@@ -1,4 +1,6 @@
 [profile.default]
-optimizer_runs = 800
+optimizer_runs = 55555
+via_ir = true
+fs_permissions = [{ access = "read-write", path = ".forge-snapshots/"}, { access = "read", path = "./out"}]
 solc = "0.8.24"
 evm_version = "cancun"
