@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: MIT
 pragma solidity ^0.8.0;
 
-import {Owned} from "solmate/auth/Owned.sol";
+import {Owned} from "solmate/src/auth/Owned.sol";
 import {IPoolManager} from "../uniswap/interfaces/IPoolManager.sol";
 import {IUnlockCallback} from "../uniswap/interfaces/callback/IUnlockCallback.sol";
 import {BalanceDelta, toBalanceDelta} from "../uniswap/types/BalanceDelta.sol";

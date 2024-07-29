@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: MIT
 pragma solidity ^0.8.20;
 
-import {FixedPointMathLib} from "solmate/utils/FixedPointMathLib.sol";
+import {FixedPointMathLib} from "solmate/src/utils/FixedPointMathLib.sol";
 import {IPoolManager} from "../../uniswap/interfaces/IPoolManager.sol";
 import {IHooks} from "../../uniswap/interfaces/IHooks.sol";
 import {PoolKey} from "../../uniswap/types/PoolKey.sol";
