@@ -335,7 +335,7 @@ contract FFGenesisNFT is Owned, ERC721 {
     string public baseURI;
     uint256 public immutable price;
     address public fund;
-    uint256 private _nonce;
+    mapping(address => uint256) private _nonces;
 
     constructor(string memory baseURI_, uint256 price_) Owned(msg.sender) ERC721("FFGenesisNFT", "FFG") {
         baseURI = baseURI_;
@@ -386,16 +386,20 @@ contract FFGenesisNFT is Owned, ERC721 {
     }
 
     function _generateId() internal returns (uint256 id) {
+        uint256 total = totalSupply;
+        uint256 nonce = _nonces[msg.sender];
         do {
             unchecked {
-                _nonce += 1;
+                nonce += 1;
             }
-            id = _calcId();
+            id = _calcId(total, nonce);
         } while (id > 0 && _ownerOf[id] != address(0));
+
+        _nonces[msg.sender] = nonce;
     }
 
-    function _calcId() internal view returns (uint256) {
-        return uint256(keccak256(abi.encodePacked(msg.sender, address(this), totalSupply, _nonce))) >> 233;
+    function _calcId(uint256 total, uint256 nonce) internal view returns (uint256) {
+        return uint256(keccak256(abi.encodePacked(msg.sender, address(this), total, nonce))) >> 233;
     }
 
     function _checkExist(uint256 id) internal view {
