@@ -1,17 +1,30 @@
 // SPDX-License-Identifier: MIT
-pragma solidity ^0.8.20;
+pragma solidity ^0.8.0;
 
+import {MerkleProofLib} from "solmate/src/utils/MerkleProofLib.sol";
+import {Currency, CurrencyLibrary} from "../uniswap/types/Currency.sol";
 import {IFeeController} from "./interfaces/IFeeController.sol";
 
 contract FeeController is IFeeController {
+    using CurrencyLibrary for Currency;
+
+    Currency public constant NATIVE = Currency.wrap(address(0));
+
     address public owner;
     uint96 public override fee;
+    bytes32 public root;
+    uint256 public deadline;
+
+    mapping(bytes32 => bool) private _leavesClaimed;
 
     error InvalidCaller();
-    error WithdrawFail();
-    event OwnerChanged(address indexed oldOwner, address indexed newOwner);
+    error InvalidProof();
+    error ClaimExpired();
+    error AlreadyClaimed();
 
-    mapping(bytes32 => uint256) public poolFee;
+    event OwnerChanged(address oldOwner, address newOwner);
+    event RootChanged(bytes32 oldRoot, bytes32 newRoot, uint256 deadline);
+    event Claim(address indexed account, uint256 amount, bytes32 leaf, bytes32 root);
 
     constructor(address _owner, uint96 _fee) {
         owner = _owner;
@@ -33,29 +46,49 @@ contract FeeController is IFeeController {
         fee = newFee;
     }
 
-    function collectFee(bytes32 id) external payable override {
+    function updateRoot(bytes32 newRoot, uint256 newDeadline) external onlyOwner {
+        emit RootChanged(root, newRoot, newDeadline);
+        root = newRoot;
+        deadline = newDeadline;
+    }
+
+    function withdraw(address to, uint256 amount) external onlyOwner {
+        NATIVE.transfer(to, amount);
+    }
+
+    function rescue(address token, address to, uint256 amount) external onlyOwner {
+        Currency.wrap(token).transfer(to, amount);
+    }
+
+    function collectFee(bytes32) external payable override {
         uint96 _fee = fee;
         if (_fee == 0) return;
 
         if (msg.value < _fee) {
             revert InsufficientFee();
         }
-
-        poolFee[id] += msg.value;
     }
 
-    function withdrawFee(bytes32 id, uint256 amount, address to) external onlyOwner {
-        poolFee[id] -= amount;
-
-        bool success;
-        assembly {
-            success := call(gas(), to, amount, 0, 0, 0, 0)
+    function claim(uint256 amount, address to, bytes32 nonce, bytes32[] calldata proof) external {
+        if (deadline < block.timestamp) {
+            revert ClaimExpired();
         }
 
-        if (!success) revert WithdrawFail();
+        bytes32 leaf = keccak256(abi.encode(msg.sender, amount, nonce));
+        bool isValid = MerkleProofLib.verify(proof, root, leaf);
+        if (!isValid) {
+            revert InvalidProof();
+        }
+
+        if (_leavesClaimed[leaf]) {
+            revert AlreadyClaimed();
+        }
+
+        _leavesClaimed[leaf] = true;
+        NATIVE.transfer(to, amount);
+
+        emit Claim(msg.sender, amount, leaf, root);
     }
 
-    receive() external payable {
-        poolFee[bytes32(0)] += msg.value;
-    }
+    receive() external payable {}
 }

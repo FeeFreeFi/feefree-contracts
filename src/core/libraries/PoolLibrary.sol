@@ -8,7 +8,6 @@ import {PoolKey} from "../../uniswap/types/PoolKey.sol";
 import {PoolId, PoolIdLibrary} from "../../uniswap/types/PoolId.sol";
 import {Currency, CurrencyLibrary} from "../../uniswap/types/Currency.sol";
 import {FullMath} from "../../uniswap/libraries/FullMath.sol";
-import {FixedPoint96} from "../../uniswap/libraries/FixedPoint96.sol";
 import {SafeCast} from "../../uniswap/libraries/SafeCast.sol";
 import {LiquidityAmounts} from "./LiquidityAmounts.sol";
 
@@ -16,14 +15,11 @@ library PoolLibrary {
     using SafeCast for uint256;
     using PoolIdLibrary for PoolKey;
 
-    /// @dev Min tick for full range with tick spacing of 60
     int24 constant MIN_TICK = -887220;
-    /// @dev Max tick for full range with tick spacing of 60
     int24 constant MAX_TICK = 887220;
-        /// @dev The minimum value that can be returned from #getSqrtRatioAtTick. Equivalent to getSqrtRatioAtTick(MIN_TICK)
     uint160 constant MIN_SQRT_RATIO = 4306310044;
-    /// @dev The maximum value that can be returned from #getSqrtRatioAtTick. Equivalent to getSqrtRatioAtTick(MAX_TICK)
     uint160 constant MAX_SQRT_RATIO = 1457652066949847389969617340386294118487833376468;
+    uint256 constant Q192 = 6277101735386680763835789423207666416102355444464034512896;
 
     function getPoolKey(Currency currency0, Currency currency1) internal pure returns (PoolKey memory) {
         return PoolKey(currency0, currency1, 0, 60, IHooks(address(0)));
@@ -69,6 +65,6 @@ library PoolLibrary {
     }
 
     function getSqrtPriceX96(uint128 amount0, uint128 amount1) internal pure returns (uint160) {
-        return (FixedPointMathLib.sqrt(FullMath.mulDiv(FixedPoint96.Q96, amount1, amount0)) << 48).toUint160();
+        return FixedPointMathLib.sqrt(FullMath.mulDiv(Q192, amount1, amount0)).toUint160();
     }
 }
