@@ -2,7 +2,7 @@
 pragma solidity ^0.8.0;
 
 import {MerkleProofLib} from "solmate/src/utils/MerkleProofLib.sol";
-import {Currency, CurrencyLibrary} from "../uniswap/types/Currency.sol";
+import {Currency, CurrencyLibrary} from "../../uniswap/types/Currency.sol";
 import {IFeeController} from "./interfaces/IFeeController.sol";
 
 contract FeeController is IFeeController {
@@ -25,6 +25,7 @@ contract FeeController is IFeeController {
     event OwnerChanged(address oldOwner, address newOwner);
     event RootChanged(bytes32 oldRoot, bytes32 newRoot, uint256 deadline);
     event Claim(address indexed account, uint256 amount, bytes32 leaf, bytes32 root);
+    event ChargeFee(uint256 fee_);
 
     constructor(address _owner, uint96 _fee) {
         owner = _owner;
@@ -67,6 +68,8 @@ contract FeeController is IFeeController {
         if (msg.value < _fee) {
             revert InsufficientFee();
         }
+
+        emit ChargeFee(msg.value);
     }
 
     function claim(uint256 amount, address to, bytes32 nonce, bytes32[] calldata proof) external {
@@ -74,9 +77,8 @@ contract FeeController is IFeeController {
             revert ClaimExpired();
         }
 
-        bytes32 leaf = keccak256(abi.encode(msg.sender, amount, nonce));
-        bool isValid = MerkleProofLib.verify(proof, root, leaf);
-        if (!isValid) {
+        bytes32 leaf = _getLeaf(msg.sender, amount, nonce);
+        if (!_isValidLeaf(leaf, proof)) {
             revert InvalidProof();
         }
 
@@ -88,6 +90,19 @@ contract FeeController is IFeeController {
         NATIVE.transfer(to, amount);
 
         emit Claim(msg.sender, amount, leaf, root);
+    }
+
+    function isValid(address account, uint256 amount, bytes32 nonce, bytes32[] calldata proof) external view returns (bool) {
+        bytes32 leaf = _getLeaf(account, amount, nonce);
+        return _isValidLeaf(leaf, proof) && !_leavesClaimed[leaf];
+    }
+
+    function _getLeaf(address account, uint256 amount, bytes32 nonce) private pure returns (bytes32) {
+        return keccak256(abi.encode(account, amount, nonce));
+    }
+
+    function _isValidLeaf(bytes32 leaf, bytes32[] calldata proof) private view returns (bool) {
+        return MerkleProofLib.verify(proof, root, leaf);
     }
 
     receive() external payable {}

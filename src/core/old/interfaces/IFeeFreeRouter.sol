@@ -1,9 +1,9 @@
 // SPDX-License-Identifier: MIT
 pragma solidity ^0.8.24;
 
-import {Currency} from "../../uniswap/types/Currency.sol";
-import {BalanceDelta} from "../../uniswap/types/BalanceDelta.sol";
-import {PoolId} from "../../uniswap/types/PoolId.sol";
+import {Currency} from "../../../uniswap/types/Currency.sol";
+import {BalanceDelta} from "../../../uniswap/types/BalanceDelta.sol";
+import {PoolId} from "../../../uniswap/types/PoolId.sol";
 
 interface IFeeFreeRouter {
     struct InitializeParams {
@@ -72,7 +72,6 @@ interface IFeeFreeRouter {
     function quoteAddLiquidity(QuoteAddLiquidityParams calldata params) external returns (uint128 amount0Min, uint128 amount1Min, uint128 liquidity);
     function quoteRemoveLiquidity(QuoteRemoveLiquidityParams calldata params) external returns (uint128 amount0, uint128 amount1);
 
-    function getPoolId(address currency0, address currency1) external view returns (bytes32);
     function getPoolState(bytes32 id) external view returns (uint160 sqrtPriceX96, uint128 liquidity);
     function getFee() external view returns (uint96);
 

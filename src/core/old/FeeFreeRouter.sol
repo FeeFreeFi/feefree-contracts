@@ -2,21 +2,22 @@
 pragma solidity ^0.8.0;
 
 import {Owned} from "solmate/src/auth/Owned.sol";
-import {IPoolManager} from "../uniswap/interfaces/IPoolManager.sol";
-import {IUnlockCallback} from "../uniswap/interfaces/callback/IUnlockCallback.sol";
-import {BalanceDelta, toBalanceDelta} from "../uniswap/types/BalanceDelta.sol";
-import {Currency, CurrencyLibrary} from "../uniswap/types/Currency.sol";
-import {PoolKey} from "../uniswap/types/PoolKey.sol";
-import {PoolId, PoolIdLibrary} from "../uniswap/types/PoolId.sol";
-import {SafeCast} from "../uniswap/libraries/SafeCast.sol";
-import {FullMath} from "../uniswap/libraries/FullMath.sol";
-import {StateLibrary} from "./libraries/StateLibrary.sol";
-import {PoolLibrary} from "./libraries/PoolLibrary.sol";
-import {IERC20} from "./interfaces/IERC20.sol";
+import {IPoolManager} from "../../uniswap/interfaces/IPoolManager.sol";
+import {IHooks} from "../../uniswap/interfaces/IHooks.sol";
+import {IUnlockCallback} from "../../uniswap/interfaces/callback/IUnlockCallback.sol";
+import {BalanceDelta, toBalanceDelta} from "../../uniswap/types/BalanceDelta.sol";
+import {Currency, CurrencyLibrary} from "../../uniswap/types/Currency.sol";
+import {PoolKey} from "../../uniswap/types/PoolKey.sol";
+import {PoolId, PoolIdLibrary} from "../../uniswap/types/PoolId.sol";
+import {SafeCast} from "../../uniswap/libraries/SafeCast.sol";
+import {FullMath} from "../../uniswap/libraries/FullMath.sol";
+import {StateLibrary} from "../libraries/StateLibrary.sol";
+import {PoolLibrary} from "../libraries/PoolLibrary.sol";
+import {IERC20} from "../interfaces/IERC20.sol";
+import {IERC20Metadata} from "../interfaces/IERC20Metadata.sol";
 import {IFeeFreeRouter} from "./interfaces/IFeeFreeRouter.sol";
 import {IFeeController} from "./interfaces/IFeeController.sol";
 import {IFeeFreeERC20} from "./interfaces/IFeeFreeERC20.sol";
-import {IERC20Metadata} from "./interfaces/IERC20Metadata.sol";
 import {FeeFreeERC20} from "./FeeFreeERC20.sol";
 
 /***
@@ -46,8 +47,6 @@ contract FeeFreeRouter is Owned, IUnlockCallback, IFeeFreeRouter {
     error ExpiredPastDeadline();
     error TooMuchSlippage();
     error NotRawCurrency();
-
-    bytes private constant ZERO_BYTES = bytes("");
 
     uint16 private constant MINIMUM_LIQUIDITY = 1000;
 
@@ -94,7 +93,7 @@ contract FeeFreeRouter is Owned, IUnlockCallback, IFeeFreeRouter {
 
         liquidityToken[poolId] = _deployLiquidityToken(Currency.unwrap(key.currency0), Currency.unwrap(key.currency1));
 
-        tick = poolManager.initialize(key, params.sqrtPriceX96, ZERO_BYTES);
+        tick = poolManager.initialize(key, params.sqrtPriceX96);
     }
 
     function addLiquidity(AddLiquidityParams calldata params) external payable override ensure(params.deadline) returns (uint128 liquidity) {
@@ -112,7 +111,7 @@ contract FeeFreeRouter is Owned, IUnlockCallback, IFeeFreeRouter {
         }
 
         uint128 poolLiquidity = _getLiquidity(poolId);
-        liquidity = PoolLibrary.getNewLiquidity(sqrtPriceX96, params.amount0Desired, params.amount1Desired);
+        liquidity = PoolLibrary.getLiquidityForAmounts(sqrtPriceX96, params.amount0Desired, params.amount1Desired);
         _checkLiquidity(poolLiquidity, liquidity);
 
         BalanceDelta addedDelta = _modifyLiquidity(key, PoolLibrary.getModifyLiquidityParams(liquidity.toInt256()));
@@ -129,7 +128,7 @@ contract FeeFreeRouter is Owned, IUnlockCallback, IFeeFreeRouter {
             revert TooMuchSlippage();
         }
 
-        if (params.currency0.isNative()) {
+        if (params.currency0.isAddressZero()) {
             uint256 remain = msg.value - uint128(-addedDelta.amount0());
             if (remain > 0) {
                 params.currency0.transfer(msg.sender, remain);
@@ -174,10 +173,6 @@ contract FeeFreeRouter is Owned, IUnlockCallback, IFeeFreeRouter {
         catch (bytes memory reason) {
             (amount0, amount1) = abi.decode(reason, (uint128, uint128));
         }
-    }
-
-    function getPoolId(address currency0, address currency1) external override pure returns (bytes32) {
-        return PoolLibrary.getPoolId(currency0, currency1);
     }
 
     function getPoolState(bytes32 id) external override view returns (uint160 sqrtPriceX96, uint128 liquidity) {
@@ -241,7 +236,7 @@ contract FeeFreeRouter is Owned, IUnlockCallback, IFeeFreeRouter {
             _takeDelta(sender, key.currency0, uint128(delta.amount0()));
             _takeDelta(sender, key.currency1, uint128(delta.amount1()));
         } else {
-            (delta,) = poolManager.modifyLiquidity(key, params, ZERO_BYTES);
+            (delta,) = poolManager.modifyLiquidity(key, params, PoolLibrary.ZERO_BYTES);
             _settleDelta(sender, key.currency0, uint128(-delta.amount0()));
             _settleDelta(sender, key.currency1, uint128(-delta.amount1()));
         }
@@ -275,7 +270,7 @@ contract FeeFreeRouter is Owned, IUnlockCallback, IFeeFreeRouter {
 
         _collectFee(bytes32(0));
 
-        return ZERO_BYTES;
+        return PoolLibrary.ZERO_BYTES;
     }
 
     function onQuoteSwap(Currency[] memory paths, int128 amountSpecified) external onlySelf returns (bytes memory) {
@@ -333,10 +328,10 @@ contract FeeFreeRouter is Owned, IUnlockCallback, IFeeFreeRouter {
         if (sqrtPriceX96 == 0) revert PoolNotInitialized();
 
         uint128 poolLiquidity = _getLiquidity(poolId);
-        uint128 liquidity = PoolLibrary.getNewLiquidity(sqrtPriceX96, params.amount0Desired, params.amount1Desired);
+        uint128 liquidity = PoolLibrary.getLiquidityForAmounts(sqrtPriceX96, params.amount0Desired, params.amount1Desired);
         _checkLiquidity(poolLiquidity, liquidity);
 
-        (BalanceDelta addedDelta,) = poolManager.modifyLiquidity(key, PoolLibrary.getModifyLiquidityParams(liquidity.toInt256()), ZERO_BYTES);
+        (BalanceDelta addedDelta,) = poolManager.modifyLiquidity(key, PoolLibrary.getModifyLiquidityParams(liquidity.toInt256()), PoolLibrary.ZERO_BYTES);
 
         if (poolLiquidity == 0) {
             // permanently lock the first MINIMUM_LIQUIDITY tokens
@@ -388,17 +383,20 @@ contract FeeFreeRouter is Owned, IUnlockCallback, IFeeFreeRouter {
         );
 
         params.liquidityDelta = -(liquidityToRemove.toInt256());
-        (delta,) = poolManager.modifyLiquidity(key, params, ZERO_BYTES);
+        (delta,) = poolManager.modifyLiquidity(key, params, PoolLibrary.ZERO_BYTES);
     }
 
-    function _swap(Currency input, Currency output, int128 amountSpecified, uint160 sqrtPriceLimitX96, bool reverse) private returns (PoolKey memory key, IPoolManager.SwapParams memory params, BalanceDelta delta, int128 amountOut) {
-        (key, params) = PoolLibrary.getSwapData(input, output, amountSpecified, sqrtPriceLimitX96);
-        delta = poolManager.swap(key, params, ZERO_BYTES);
-        amountOut = params.zeroForOne == reverse ? -delta.amount0() : -delta.amount1();
+    function _swap(Currency input, Currency output, int128 amountSpecified, uint160, bool direction) private returns (PoolKey memory key, IPoolManager.SwapParams memory params, BalanceDelta delta, int128 amountOut) {
+        bool reverse;
+        (key, reverse) = PoolLibrary.getPoolKey(input, output, IHooks(address(0)));
+        params = PoolLibrary.getSwapData(!reverse, amountSpecified);
+        delta = poolManager.swap(key, params, PoolLibrary.ZERO_BYTES);
+
+        amountOut = reverse != direction ? -delta.amount0() : -delta.amount1();
     }
 
     function _settleDelta(address sender, Currency currency, uint256 amount) private {
-        if (currency.isNative()) {
+        if (currency.isAddressZero()) {
             poolManager.settle{value: amount}();
         } else {
             poolManager.sync(currency);
@@ -426,7 +424,7 @@ contract FeeFreeRouter is Owned, IUnlockCallback, IFeeFreeRouter {
 
     function _deployExchangeToken(address currency) private returns (address) {
         string memory symbol = string.concat(_getSymbol(currency), "+");
-        uint8 decimals = _isNative(currency) ? 18 : IERC20Metadata(currency).decimals();
+        uint8 decimals = _isAddressZero(currency) ? 18 : IERC20Metadata(currency).decimals();
         return address(new FeeFreeERC20(symbol, symbol, decimals));
     }
 
@@ -446,11 +444,11 @@ contract FeeFreeRouter is Owned, IUnlockCallback, IFeeFreeRouter {
     }
 
     function _getSymbol(address currency) private view returns (string memory) {
-        return _isNative(currency) ? "NATIVE" : IERC20Metadata(currency).symbol();
+        return _isAddressZero(currency) ? "NATIVE" : IERC20Metadata(currency).symbol();
     }
 
-    function _isNative(address currency) private pure returns (bool) {
-        return currency == address(0);
+    function _isAddressZero(address addr) private pure returns (bool) {
+        return addr == address(0);
     }
 
     function _getCurrencyDelta(Currency currency) private view returns (int256) {
@@ -466,7 +464,7 @@ contract FeeFreeRouter is Owned, IUnlockCallback, IFeeFreeRouter {
     }
 
     function _getPoolMeta(Currency currency0, Currency currency1) private view returns (PoolKey memory key, PoolId poolId, uint160 sqrtPriceX96) {
-        key = PoolLibrary.getPoolKey(currency0, currency1);
+        (key, ) = PoolLibrary.getPoolKey(currency0, currency1, IHooks(address(0)));
         poolId = key.toId();
         sqrtPriceX96 = _getPoolSqrtPrice(poolId);
     }
