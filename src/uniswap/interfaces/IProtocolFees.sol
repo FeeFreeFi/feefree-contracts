@@ -1,20 +1,20 @@
 // SPDX-License-Identifier: MIT
-pragma solidity ^0.8.19;
+pragma solidity ^0.8.0;
 
 import {Currency} from "../types/Currency.sol";
-import {IProtocolFeeController} from "../interfaces/IProtocolFeeController.sol";
 import {PoolId} from "../types/PoolId.sol";
 import {PoolKey} from "../types/PoolKey.sol";
 
 /// @notice Interface for all protocol-fee related functions in the pool manager
 interface IProtocolFees {
-    /// @notice Thrown when not enough gas is provided to look up the protocol fee
-    error ProtocolFeeCannotBeFetched();
     /// @notice Thrown when protocol fee is set too high
     error ProtocolFeeTooLarge(uint24 fee);
 
     /// @notice Thrown when collectProtocolFees or setProtocolFee is not called by the controller.
     error InvalidCaller();
+
+    /// @notice Thrown when collectProtocolFees is attempted on a token that is synced.
+    error ProtocolFeeCurrencySynced();
 
     /// @notice Emitted when the protocol fee controller address is updated in setProtocolFeeController.
     event ProtocolFeeControllerUpdated(address indexed protocolFeeController);
@@ -34,9 +34,10 @@ interface IProtocolFees {
 
     /// @notice Sets the protocol fee controller
     /// @param controller The new protocol fee controller
-    function setProtocolFeeController(IProtocolFeeController controller) external;
+    function setProtocolFeeController(address controller) external;
 
     /// @notice Collects the protocol fees for a given recipient and currency, returning the amount collected
+    /// @dev This will revert if the contract is unlocked
     /// @param recipient The address to receive the protocol fees
     /// @param currency The currency to withdraw
     /// @param amount The amount of currency to withdraw
@@ -46,6 +47,6 @@ interface IProtocolFees {
         returns (uint256 amountCollected);
 
     /// @notice Returns the current protocol fee controller address
-    /// @return IProtocolFeeController The currency protocol fee controller
-    function protocolFeeController() external view returns (IProtocolFeeController);
+    /// @return address The current protocol fee controller address
+    function protocolFeeController() external view returns (address);
 }

@@ -7,7 +7,7 @@ import "forge-std/console.sol";
 import {OP} from "../src/mock/OP.sol";
 
 /**
- * usage: forge script script/OP.s.sol:Deploy --broadcast -vvvv --rpc-url $BASE_SEPOLIA_RPC_URL
+ * usage: forge script script/OP.s.sol:Deploy --broadcast -vvvv --rpc-url $RPC_URL
  */
 contract Deploy is Script {
     function run() external {

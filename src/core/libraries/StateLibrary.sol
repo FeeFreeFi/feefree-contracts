@@ -50,6 +50,36 @@ library StateLibrary {
         liquidity = uint128(uint256(manager.extsload(slot)));
     }
 
+       /**
+     * @notice Get Slot0 of the pool: sqrtPriceX96
+     * @dev Corresponds to pools[poolId].slot0
+     * @param manager The pool manager contract.
+     * @param poolId The ID of the pool.
+     * @return sqrtPriceX96 The square root of the price of the pool, in Q96 precision.
+     * @return liquidity The liquidity of the pool.
+     */
+    function getSqrtPriceX96AndLiquidity(IPoolManager manager, PoolId poolId)
+        internal
+        view
+        returns (uint160 sqrtPriceX96, uint128 liquidity)
+    {
+        // slot key of Pool.State value: `pools[poolId]`
+        bytes32 stateSlot = _getPoolStateSlot(poolId);
+
+        // Pool.State: `uint128 liquidity`
+        bytes32 slot = bytes32(uint256(stateSlot) + 3);
+        liquidity = uint128(uint256(manager.extsload(slot)));
+
+        bytes32 data = manager.extsload(stateSlot);
+        //   24 bits  |24bits|24bits      |24 bits|160 bits
+        // 0x000000   |000bb8|000000      |ffff75 |0000000000000000fe3aa841ba359daa0ea9eff7
+        // ---------- | fee  |protocolfee | tick  | sqrtPriceX96
+        assembly ("memory-safe") {
+            // bottom 160 bits of data
+            sqrtPriceX96 := and(data, 0xFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFF)
+        }
+    }
+
     /// @notice Get the current delta for a caller in the given currency
     /// @param target The credited account address
     /// @param currency The currency for which to lookup the delta

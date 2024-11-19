@@ -1,4 +1,4 @@
-// SPDX-License-Identifier: GPL-2.0-or-later
+// SPDX-License-Identifier: MIT
 pragma solidity ^0.8.0;
 
 import {CustomRevert} from "./CustomRevert.sol";
@@ -24,6 +24,14 @@ library SafeCast {
     function toUint128(uint256 x) internal pure returns (uint128 y) {
         y = uint128(x);
         if (x != y) SafeCastOverflow.selector.revertWith();
+    }
+
+    /// @notice Cast a int128 to a uint128, revert on overflow or underflow
+    /// @param x The int128 to be casted
+    /// @return y The casted integer, now type uint128
+    function toUint128(int128 x) internal pure returns (uint128 y) {
+        if (x < 0) SafeCastOverflow.selector.revertWith();
+        y = uint128(x);
     }
 
     /// @notice Cast a int256 to a int128, revert on overflow or underflow
