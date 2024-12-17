@@ -27,18 +27,18 @@ library PoolLibrary {
 
     bytes internal constant ZERO_BYTES = "";
 
-    function getPoolKey(Currency currency0, Currency currency1, IHooks hooks) internal pure returns (PoolKey memory poolKey, bool reverse) {
+    function getPoolKey(Currency currency0, Currency currency1, IHooks hooks) internal pure returns (PoolKey memory key, bool reverse) {
         if (currency0 > currency1) {
             (currency0, currency1) = (currency1, currency0);
             reverse = true;
         }
 
-        poolKey = PoolKey(currency0, currency1, 0, TICK_SPACING, hooks);
+        key = PoolKey(currency0, currency1, 0, TICK_SPACING, hooks);
     }
 
-    function toTokenId(PoolKey memory poolKey) internal pure returns (uint256 tokenId) {
+    function toTokenId(PoolKey memory key) internal pure returns (uint256 tokenId) {
         assembly ("memory-safe") {
-            tokenId := keccak256(poolKey, 0xa0)
+            tokenId := keccak256(key, 0xa0)
         }
     }
 
@@ -90,11 +90,6 @@ library PoolLibrary {
         } else {
             amount1 = SqrtPriceMath.getAmount1Delta(MIN_SQRT_PRICE, MAX_SQRT_PRICE, liquidity).toInt128();
         }
-    }
-
-    function getInputFromOutput(uint160 sqrtPriceX96, uint128 liquidity, uint128 amountOut, bool zeroForOne) internal pure returns (uint128) {
-        uint160 newSqrtPriceX96 = SqrtPriceMath.getNextSqrtPriceFromOutput(sqrtPriceX96, liquidity, amountOut, zeroForOne);
-        return (zeroForOne ? SqrtPriceMath.getAmount0Delta(sqrtPriceX96, newSqrtPriceX96, liquidity, true) : SqrtPriceMath.getAmount1Delta(sqrtPriceX96, newSqrtPriceX96, liquidity, true)).toUint128();
     }
 
     /// @notice Computes the amount of liquidity received for a given amount of token0 and price range

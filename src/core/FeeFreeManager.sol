@@ -10,6 +10,7 @@ import {BalanceDelta} from "../uniswap/types/BalanceDelta.sol";
 import {PoolKey} from "../uniswap/types/PoolKey.sol";
 import {PoolId, PoolIdLibrary} from "../uniswap/types/PoolId.sol";
 import {SafeCast} from "../uniswap/libraries/SafeCast.sol";
+import {FullMath} from "../uniswap/libraries/FullMath.sol";
 import {IERC20} from "./interfaces/IERC20.sol";
 import {IFeeFreeManager} from "./interfaces/IFeeFreeManager.sol";
 import {IFactory} from "./interfaces/IFactory.sol";
@@ -39,6 +40,7 @@ contract FeeFreeManager is ReentrancyLock, Owned, IUnlockCallback, IFeeFreeManag
     using StateLibrary for IPoolManager;
     using PoolIdLibrary for PoolKey;
     using SafeCast for uint128;
+    using SafeCast for uint256;
     using CalldataDecoder for bytes;
     using SlippageCheck for BalanceDelta;
 
@@ -155,20 +157,23 @@ contract FeeFreeManager is ReentrancyLock, Owned, IUnlockCallback, IFeeFreeManag
     }
 
     function _launch(LaunchParams calldata params) internal {
-        _checkAmount(params.asset.isAddressZero(), params.amount);
+        _checkAmount(params.asset.isAddressZero() ? params.amount : 0);
 
-        (Currency pCurrency, Currency nCurrency) = factory.deploy(params.name, params.symbol, params.totalSupply);
+        (address pAddr, address nAddr) = factory.deploy(params.name, params.symbol, params.totalSupply, address(this));
 
         uint256 halfAmount = params.amount >> 1;
-        uint256 halfSupply = params.totalSupply >> 1;
-        (PoolId pId, uint128 pLiquidity) = _initOne(pCurrency, params.asset, halfSupply, halfAmount, params.recipient, params.duration);
-        (PoolId nId, uint128 nLiquidity) = _initOne(nCurrency, params.asset, halfSupply, halfAmount, params.recipient, params.duration);
+        uint256 haftSupply = params.totalSupply >> 1;
 
-        address sender = _getLocker();
-        _settle(params.asset, sender, uint256(-_currencyDelta(params.asset)));
+        Currency pCurrency = Currency.wrap(pAddr);
+        Currency nCurrency = Currency.wrap(nAddr);
 
-        emit AddLiquidity(pId, sender, pLiquidity);
-        emit AddLiquidity(nId, sender, nLiquidity);
+        _initOne(pCurrency, params.asset, haftSupply, halfAmount, params.recipient, params.duration, true);
+        _initOne(nCurrency, params.asset, haftSupply, halfAmount, params.recipient, params.duration, true);
+        _initOne(pCurrency, nCurrency, haftSupply, haftSupply, params.recipient, params.duration, false);
+
+        _settle(params.asset, _getLocker(), uint256(-_currencyDelta(params.asset)));
+        _settle(pCurrency, address(this), uint256(-_currencyDelta(pCurrency)));
+        _settle(nCurrency, address(this), uint256(-_currencyDelta(nCurrency)));
     }
 
     function _initialize(InitializeParams calldata params) internal {
@@ -293,10 +298,10 @@ contract FeeFreeManager is ReentrancyLock, Owned, IUnlockCallback, IFeeFreeManag
         emit Exchange(sender, params.currency, params.amountSpecified, exchangeFee);
     }
 
-    function _initOne(Currency currency0, Currency currency1, uint256 amount0, uint256 amount1, address recipient, uint256 duration) internal returns (PoolId, uint128) {
-        (PoolKey memory key, PoolId id, uint128 liquidity, bool reverse) = _initializePool(currency0, currency1, amount0, amount1, true);
+    function _initOne(Currency currency0, Currency currency1, uint256 amount0, uint256 amount1, address recipient, uint256 duration, bool shortable) internal {
+        (PoolKey memory key, PoolId id, uint128 liquidity,) = _initializePool(currency0, currency1, amount0, amount1, shortable);
 
-        (BalanceDelta delta, ) = poolManager.modifyLiquidity(
+        poolManager.modifyLiquidity(
             key,
             PoolLibrary.getModifyLiquidityParams(liquidity.toInt256()),
             PoolLibrary.ZERO_BYTES
@@ -304,15 +309,11 @@ contract FeeFreeManager is ReentrancyLock, Owned, IUnlockCallback, IFeeFreeManag
 
         _mintLiquidity(PoolLibrary.toTokenId(key), liquidity, recipient, duration);
 
-        _settle(currency0, address(this), uint128(reverse ? -delta.amount1() : -delta.amount0()));
-        currency0.transfer(address(hooks), currency0.balanceOfSelf());
-
-        return (id, liquidity);
+        emit AddLiquidity(id, _getLocker(), liquidity);
     }
 
-    function _initializePool(Currency currency0, Currency currency1, uint256 amount0, uint256 amount1, bool isPairToken) internal returns (PoolKey memory key, PoolId id, uint128 liquidity, bool reverse) {
+    function _initializePool(Currency currency0, Currency currency1, uint256 amount0, uint256 amount1, bool shortable) internal returns (PoolKey memory key, PoolId id, uint128 liquidity, bool reverse) {
         (key, reverse)  = PoolLibrary.getPoolKey(currency0, currency1, hooks);
-        id = key.toId();
         if (reverse) (amount0, amount1) = (amount1, amount0);
 
         uint160 sqrtPriceX96 = PoolLibrary.getSqrtPriceX96(amount0, amount1);
@@ -320,15 +321,16 @@ contract FeeFreeManager is ReentrancyLock, Owned, IUnlockCallback, IFeeFreeManag
 
         poolManager.initialize(key, sqrtPriceX96);
 
+        id = key.toId();
         getPoolInfo[id] = PoolInfo({
             currency0: key.currency0,
             currency1: key.currency1,
-            tag: isPairToken ? (reverse ? PoolTags.ONE : PoolTags.ZERO) : PoolTags.DEFAULT
+            tag: shortable ? (reverse ? PoolTags.ZERO : PoolTags.ONE) : PoolTags.NORMAL
         });
     }
 
     function _doAddLiquidity(PoolKey memory key, uint128 liquidity, uint256 amount0) internal returns (BalanceDelta delta) {
-        _checkAmount(key.currency0.isAddressZero(), amount0);
+        _checkAmount(key.currency0.isAddressZero() ? amount0 : 0);
 
         (delta, ) = poolManager.modifyLiquidity(
             key,
@@ -359,8 +361,8 @@ contract FeeFreeManager is ReentrancyLock, Owned, IUnlockCallback, IFeeFreeManag
         }
     }
 
-    function _checkAmount(bool isNative, uint256 amount) internal view {
-        if (MsgValue.get() != (isNative ? amount : 0)) {
+    function _checkAmount(uint256 amount) internal view {
+        if (MsgValue.get() != amount) {
             revert InvalidAmount();
         }
     }
@@ -381,13 +383,10 @@ contract FeeFreeManager is ReentrancyLock, Owned, IUnlockCallback, IFeeFreeManag
     function _swapOne(Currency input, Currency output, int128 amountSpecified, bool direction) internal returns (int128) {
         (PoolKey memory key, bool reverse) = PoolLibrary.getPoolKey(input, output, hooks);
 
-        PoolId id = key.toId();
-        (uint160 sqrtPriceX96, uint128 liquidity) = poolManager.getSqrtPriceX96AndLiquidity(id);
-
         BalanceDelta delta = poolManager.swap(
             key,
             PoolLibrary.getSwapData(!reverse, amountSpecified),
-            abi.encode(sqrtPriceX96, liquidity, getPoolInfo[id].tag)
+            PoolLibrary.ZERO_BYTES
         );
 
         return reverse != direction ? -delta.amount0() : -delta.amount1();

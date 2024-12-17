@@ -82,7 +82,7 @@ contract Quoter is IUnlockCallback, IQuoter {
         (int128 amount0, int128 amount1) = PoolLibrary.getAmountsForLiquidity(sqrtPriceX96, -(params.liquidity.toInt128()));
 
         (,,uint8 tag) = manager.getPoolInfo(id);
-        if (tag != PoolTags.DEFAULT) {
+        if (tag != PoolTags.NORMAL) {
             (amount0Min, amount1Min) = FeeLibrary.getAmountsAfterFee(amount0.toUint128(), amount1.toUint128(), manager.feeManager().lpFee());
         } else {
             amount0Min = amount0.toUint128();
@@ -231,14 +231,10 @@ contract Quoter is IUnlockCallback, IQuoter {
     function _swapOne(Currency input, Currency output, int128 amountSpecified, bool direction) internal returns (int128) {
         (PoolKey memory key, bool reverse) = PoolLibrary.getPoolKey(input, output, hooks);
 
-        PoolId id = key.toId();
-        (uint160 sqrtPriceX96, uint128 liquidity) = getPoolState(id);
-
-        (,,uint8 tag) = manager.getPoolInfo(id);
         BalanceDelta delta = poolManager.swap(
             key,
             PoolLibrary.getSwapData(!reverse, amountSpecified),
-            abi.encode(sqrtPriceX96, liquidity, tag)
+            PoolLibrary.ZERO_BYTES
         );
 
         return reverse != direction ? -delta.amount0() : -delta.amount1();

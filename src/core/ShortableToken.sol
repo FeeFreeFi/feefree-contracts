@@ -14,12 +14,15 @@ import {ERC20} from "./base/ERC20.sol";
  *    \__|    \_______| \_______|\__|   \__|       \_______| \_______|
  */
 contract ShortableToken is ERC20 {
-    error OpponentExisted();
+    string private constant NEGATIVE_SUFFIX = "-";
 
     address public opponent;
+    bool public positive;
 
-    constructor(string memory name, string memory symbol, uint256 _totalSupply, address recipient) ERC20(name, symbol, 18) {
-        _mint(recipient, _totalSupply);
+    error OpponentExisted();
+
+    constructor(string memory name, string memory symbol, uint256 totalSupply, address recipient) ERC20(name, symbol, 18) {
+        _mint(recipient, totalSupply);
     }
 
     function setOpponent(address _opponent) public {
@@ -28,5 +31,11 @@ contract ShortableToken is ERC20 {
         }
 
         opponent = _opponent;
+
+        positive = address(this) < _opponent;
+        if (!positive) {
+            name = string.concat(name, NEGATIVE_SUFFIX);
+            symbol = string.concat(symbol, NEGATIVE_SUFFIX);
+        }
     }
 }

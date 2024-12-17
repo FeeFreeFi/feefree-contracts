@@ -2,7 +2,6 @@
 pragma solidity ^0.8.0;
 
 import {Owned} from "solmate/src/auth/Owned.sol";
-import {Currency} from "../uniswap/types/Currency.sol";
 import {IFactory} from "./interfaces/IFactory.sol";
 import {ShortableToken} from "./ShortableToken.sol";
 
@@ -17,21 +16,18 @@ import {ShortableToken} from "./ShortableToken.sol";
  *    \__|    \_______| \_______|\__|   \__|       \_______| \_______|
  */
 contract Factory is Owned, IFactory {
-    string private constant NEGATIVE_SUFFIX = "-";
-
     constructor(address _owner) Owned(_owner) {}
 
-    function deploy(string memory name, string memory symbol, uint256 totalSupply) external override onlyOwner returns (Currency positiveCurrency, Currency negativeCurrency) {
-        ShortableToken pToken = new ShortableToken(name, symbol, totalSupply, msg.sender);
-        ShortableToken nToken = new ShortableToken(string.concat(name, NEGATIVE_SUFFIX), string.concat(symbol, NEGATIVE_SUFFIX), totalSupply, msg.sender);
+    function deploy(string memory name, string memory symbol, uint256 totalSupply, address recipient) external override onlyOwner returns (address pAddr, address nAddr) {
+        ShortableToken tokenA = new ShortableToken(name, symbol, totalSupply, recipient);
+        ShortableToken tokenB = new ShortableToken(name, symbol, totalSupply, recipient);
 
-        address pAddr = address(pToken);
-        address nAddr = address(nToken);
+        pAddr = address(tokenA);
+        nAddr = address(tokenB);
 
-        pToken.setOpponent(nAddr);
-        nToken.setOpponent(pAddr);
+        tokenA.setOpponent(nAddr);
+        tokenB.setOpponent(pAddr);
 
-        positiveCurrency = Currency.wrap(pAddr);
-        negativeCurrency = Currency.wrap(nAddr);
+        if (pAddr > nAddr) (pAddr, nAddr) = (nAddr, pAddr);
     }
 }
